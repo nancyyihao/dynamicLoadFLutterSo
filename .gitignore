@@ -14,3 +14,4 @@
 .cxx
 local.properties
 .idea
+/dart_server/server.log
