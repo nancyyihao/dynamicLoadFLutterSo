@@ -51,8 +51,8 @@ public class AppSoDynamicTask extends DefaultTask {
 
         String appSoUrl = checkFlutterSDK(appSOVersion);
         
-        // 查找所有架构的libapp.so文件
-        String[] abis = {"arm64-v8a", "armeabi-v7a", "x86", "x86_64"};
+        // 查找ARM架构的libapp.so文件（移除x86支持）
+        String[] abis = {"arm64-v8a", "armeabi-v7a"};
         File primarySoFile = null;
         
         for (String abi : abis) {

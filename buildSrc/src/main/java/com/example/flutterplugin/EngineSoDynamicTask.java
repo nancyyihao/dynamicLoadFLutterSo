@@ -57,9 +57,6 @@ public class EngineSoDynamicTask extends DefaultTask {
         // 处理libflutter.so
         processFlutterSo(flutterSDKVersion);
         
-        // 处理libapp.so
-        processAppSo(flutterSDKVersion);
-        
         // 完成配置文件写入
         finalizeAssetsConfig();
         LogUtil.log("SO文件处理完成，配置已写入assets");
@@ -68,182 +65,90 @@ public class EngineSoDynamicTask extends DefaultTask {
     private void processFlutterSo(String flutterSDKVersion) {
         LogUtil.log("开始处理 libflutter.so");
         
-        // 处理所有架构的libflutter.so
-        String[] abis = {"arm64-v8a", "armeabi-v7a", "x86", "x86_64"};
-        File primaryFlutterSoFile = null;
+        // 处理ARM架构的libflutter.so（移除x86支持）
+        String[] abis = {"arm64-v8a", "armeabi-v7a"};
+        java.util.Map<String, File> flutterSoFiles = new java.util.HashMap<>();
         
+        // 收集所有架构的libflutter.so文件
         for (String abi : abis) {
             File flutterSoFile = FileUtil.findSpecificFile(mergeNativeLibsOutputPath, abi, "libflutter.so");
             if (flutterSoFile != null && flutterSoFile.exists()) {
                 LogUtil.log("找到 " + abi + " 架构的 libflutter.so: " + flutterSoFile.getAbsolutePath());
-                if (primaryFlutterSoFile == null) {
-                    primaryFlutterSoFile = flutterSoFile; // 使用第一个找到的作为主要文件
-                }
+                flutterSoFiles.put(abi, flutterSoFile);
             }
         }
         
-        if (primaryFlutterSoFile == null) {
+        if (flutterSoFiles.isEmpty()) {
             LogUtil.log("未找到任何架构的libflutter.so文件");
             return;
         }
         
-        LogUtil.log("使用主要libflutter.so文件: " + primaryFlutterSoFile.getAbsolutePath());
+        LogUtil.log("找到 " + flutterSoFiles.size() + " 个架构的libflutter.so文件");
 
-        //检测 libflutter.so 是否需要重新上传
-        String flutterSoUrl = checkFlutterSDK(flutterSDKVersion);
-        if (flutterSoUrl != null && !flutterSoUrl.isEmpty()) {
-            //不需要重新上传，直接写入配置并删除主要架构的文件
-            LogUtil.log("libflutter.so已存在于服务器，无需重新上传");
-            updateAssetsConfig("flutterSoUrl", flutterSoUrl);
-            updateAssetsConfig("flutterSoVersion", flutterSDKVersion);
-            updateAssetsConfig("flutterSoMd5", "");
-            updateAssetsConfig("flutterSoSize", "0");
+        // 先设置版本信息（去掉版本中的MD5，只保留基础版本号）
+        String baseVersion = flutterSDKVersion.split("-")[0]; // 去掉MD5部分
+        updateAssetsConfig("flutterSoVersion", baseVersion);
+        
+        // 为每个架构处理libflutter.so
+        boolean allArchsProcessed = true;
+        
+        for (java.util.Map.Entry<String, File> entry : flutterSoFiles.entrySet()) {
+            String abi = entry.getKey();
+            File flutterSoFile = entry.getValue();
             
-            // 删除所有架构的libflutter.so文件以实现完全动态加载
-            for (String abi : abis) {
-                File abiSoFile = FileUtil.findSpecificFile(mergeNativeLibsOutputPath, abi, "libflutter.so");
-                if (abiSoFile != null && abiSoFile.exists()) {
-                    boolean deleteResult = abiSoFile.delete();
-                    LogUtil.log("删除" + abi + " libflutter.so结果= " + deleteResult);
-                }
-            }
-            return;
-        }
-        
-        //创建ZIP包并上传libflutter.so
-        if (primaryFlutterSoFile == null || !primaryFlutterSoFile.exists()) {
-            LogUtil.log("libflutter.so文件不存在，跳过处理");
-            return;
-        }
-        
-        // 计算MD5和文件大小
-        String md5 = MD5Util.getFileMD5(primaryFlutterSoFile);
-        long fileSize = primaryFlutterSoFile.length();
-        LogUtil.log("libflutter.so MD5: " + md5 + ", 大小: " + fileSize + " bytes");
-        
-        // 创建ZIP包
-        File zipFile = createSoZipPackage(primaryFlutterSoFile, flutterSDKVersion, "libflutter");
-        if (zipFile == null) {
-            LogUtil.log("创建libflutter.so ZIP包失败");
-            return;
-        }
-        
-        // 上传ZIP包到本地服务器
-        LogUtil.log("正在上传libflutter.so ZIP包到本地服务器...");
-        String url = HttpUtil.getInstance().upload(zipFile);
-        if (url != null){
-            LogUtil.log("libflutter.so ZIP包上传成功: " + url);
-            updateAssetsConfig("flutterSoUrl", url);
-            updateAssetsConfig("flutterSoVersion", flutterSDKVersion);
-            updateAssetsConfig("flutterSoMd5", md5);
-            updateAssetsConfig("flutterSoSize", String.valueOf(fileSize));
+            LogUtil.log("开始处理 " + abi + " 架构的 libflutter.so");
             
-            // 删除所有架构的libflutter.so文件以实现完全动态加载
-            for (String abi : abis) {
-                File abiSoFile = FileUtil.findSpecificFile(mergeNativeLibsOutputPath, abi, "libflutter.so");
-                if (abiSoFile != null && abiSoFile.exists()) {
-                    boolean deleteResult = abiSoFile.delete();
-                    LogUtil.log("从APK中删除" + abi + " libflutter.so结果= " + deleteResult);
-                }
+            // 计算MD5和文件大小
+            String md5 = MD5Util.getFileMD5(flutterSoFile);
+            long fileSize = flutterSoFile.length();
+            LogUtil.log(abi + " libflutter.so MD5: " + md5 + ", 大小: " + fileSize + " bytes");
+            
+            // 检测该架构的SO是否需要重新上传
+            String archFlutterSoUrl = checkFlutterSDK(flutterSDKVersion + "-" + abi);
+            if (archFlutterSoUrl != null && !archFlutterSoUrl.isEmpty()) {
+                LogUtil.log(abi + " 架构的libflutter.so已存在于服务器，无需重新上传");
+                // 即使不需要重新上传，也要添加架构信息到配置中
+                addArchInfo(abi, archFlutterSoUrl, md5, fileSize);
+                continue;
             }
             
-            // 清理临时ZIP文件
-            zipFile.delete();
-            LogUtil.log("libflutter.so处理完成");
+            // 创建该架构的ZIP包（去掉文件名中的MD5）
+            File zipFile = createSoZipPackage(flutterSoFile, flutterSDKVersion, "libflutter", abi);
+            if (zipFile == null) {
+                LogUtil.log("创建 " + abi + " libflutter.so ZIP包失败");
+                allArchsProcessed = false;
+                continue;
+            }
+            
+            // 上传ZIP包到本地服务器
+            LogUtil.log("正在上传 " + abi + " libflutter.so ZIP包到本地服务器...");
+            String url = HttpUtil.getInstance().upload(zipFile);
+            if (url != null) {
+                LogUtil.log(abi + " libflutter.so ZIP包上传成功: " + url);
+                // 添加架构信息到配置中
+                addArchInfo(abi, url, md5, fileSize);
+                // 清理临时ZIP文件
+                zipFile.delete();
+            } else {
+                LogUtil.log(abi + " libflutter.so上传失败");
+                allArchsProcessed = false;
+            }
+        }
+        
+        if (allArchsProcessed) {
+            // 所有架构都处理成功，删除APK中的SO文件
+            for (java.util.Map.Entry<String, File> entry : flutterSoFiles.entrySet()) {
+                String abi = entry.getKey();
+                File flutterSoFile = entry.getValue();
+                boolean deleteResult = flutterSoFile.delete();
+                LogUtil.log("从APK中删除 " + abi + " libflutter.so结果= " + deleteResult);
+            }
+            LogUtil.log("所有架构的libflutter.so处理完成");
         } else {
-            LogUtil.log("libflutter.so上传失败，保留原始文件");
+            LogUtil.log("部分架构的libflutter.so处理失败，保留原始文件");
         }
     }
     
-    private void processAppSo(String version) {
-        LogUtil.log("开始处理 libapp.so");
-        
-        // 处理所有架构的libapp.so
-        String[] abis = {"arm64-v8a", "armeabi-v7a", "x86", "x86_64"};
-        File primaryAppSoFile = null;
-        
-        for (String abi : abis) {
-            File appSoFile = FileUtil.findSpecificFile(mergeNativeLibsOutputPath, abi, "libapp.so");
-            if (appSoFile != null && appSoFile.exists()) {
-                LogUtil.log("找到 " + abi + " 架构的 libapp.so: " + appSoFile.getAbsolutePath());
-                if (primaryAppSoFile == null) {
-                    primaryAppSoFile = appSoFile; // 使用第一个找到的作为主要文件
-                }
-            }
-        }
-        
-        if (primaryAppSoFile == null) {
-            LogUtil.log("未找到任何架构的libapp.so文件");
-            return;
-        }
-        
-        LogUtil.log("使用主要libapp.so文件: " + primaryAppSoFile.getAbsolutePath());
-        
-        // 计算MD5和文件大小
-        String md5 = MD5Util.getFileMD5(primaryAppSoFile);
-        long fileSize = primaryAppSoFile.length();
-        LogUtil.log("libapp.so MD5: " + md5 + ", 大小: " + fileSize + " bytes");
-        
-        // 检测 libapp.so 是否需要重新上传
-        String appSoUrl = checkAppSo(md5);
-        if (appSoUrl != null && !appSoUrl.isEmpty()) {
-            LogUtil.log("libapp.so已存在于服务器，无需重新上传");
-            updateAssetsConfig("appSoUrl", appSoUrl);
-            updateAssetsConfig("appSoMd5", md5);
-            updateAssetsConfig("appSoSize", String.valueOf(fileSize));
-            
-            // 删除所有架构的libapp.so文件以实现完全动态加载
-            for (String abi : abis) {
-                File abiAppSoFile = FileUtil.findSpecificFile(mergeNativeLibsOutputPath, abi, "libapp.so");
-                if (abiAppSoFile != null && abiAppSoFile.exists()) {
-                    boolean deleteResult = abiAppSoFile.delete();
-                    LogUtil.log("删除" + abi + " libapp.so结果= " + deleteResult);
-                }
-            }
-            return;
-        }
-        
-        // 创建ZIP包
-        File zipFile = createSoZipPackage(primaryAppSoFile, version, "libapp");
-        if (zipFile == null) {
-            LogUtil.log("创建libapp.so ZIP包失败");
-            return;
-        }
-        
-        // 上传ZIP包到本地服务器
-        LogUtil.log("正在上传libapp.so ZIP包到本地服务器...");
-        String url = HttpUtil.getInstance().upload(zipFile);
-        if (url != null){
-            LogUtil.log("libapp.so ZIP包上传成功: " + url);
-            updateAssetsConfig("appSoUrl", url);
-            updateAssetsConfig("appSoMd5", md5);
-            updateAssetsConfig("appSoSize", String.valueOf(fileSize));
-            
-            // 删除所有架构的libapp.so文件以实现完全动态加载
-            for (String abi : abis) {
-                File abiAppSoFile = FileUtil.findSpecificFile(mergeNativeLibsOutputPath, abi, "libapp.so");
-                if (abiAppSoFile != null && abiAppSoFile.exists()) {
-                    boolean deleteResult = abiAppSoFile.delete();
-                    LogUtil.log("从APK中删除" + abi + " libapp.so结果= " + deleteResult);
-                }
-            }
-            
-            // 清理临时ZIP文件
-            zipFile.delete();
-            LogUtil.log("libapp.so处理完成");
-        } else {
-            LogUtil.log("libapp.so上传失败，保留原始文件");
-        }
-        
-        // 检查是否需要禁用strip任务
-        File arm64FlutterSoFile = FileUtil.findSpecificFile(mergeNativeLibsOutputPath, "arm64-v8a", "libflutter.so");
-        File arm64AppSoFile = FileUtil.findSpecificFile(mergeNativeLibsOutputPath, "arm64-v8a", "libapp.so");
-        if ((arm64FlutterSoFile == null || !arm64FlutterSoFile.exists()) && 
-            (arm64AppSoFile == null || !arm64AppSoFile.exists())) {
-            disableStripTasks();
-            LogUtil.log("arm64-v8a架构的SO文件已删除，已禁用strip任务");
-        }
-    }
     @Nullable
     private String checkFlutterSDK(String sdkVersion) {
         return HttpUtil.getInstance().check(SoType.LIB_FLUTTER_SO, sdkVersion);
@@ -261,48 +166,44 @@ public class EngineSoDynamicTask extends DefaultTask {
     }
     
     // 用于收集配置信息的Map
-    private java.util.Map<String, String> configMap = new java.util.HashMap<>();
+    private java.util.Map<String, Object> configMap = new java.util.HashMap<>();
     
     private void updateAssetsConfig(String key, String value) {
         configMap.put(key, value);
         LogUtil.log("添加配置: " + key + " = " + value);
     }
     
+    private void addArchInfo(String arch, String url, String md5, long size) {
+        java.util.Map<String, Object> archInfo = new java.util.HashMap<>();
+        archInfo.put("url", url);
+        archInfo.put("md5", md5);
+        archInfo.put("size", size);
+        configMap.put(arch, archInfo);
+        LogUtil.log("添加架构信息: " + arch + " -> " + archInfo);
+    }
+    
     private void finalizeAssetsConfig() {
-        // 构建完整的JSON配置
-        StringBuilder jsonBuilder = new StringBuilder("{");
-        
-        // 添加默认值
-        configMap.putIfAbsent("minAppVersion", "1.0.0");
-        configMap.putIfAbsent("maxAppVersion", "2.0.0");
-        
-        boolean first = true;
-        for (java.util.Map.Entry<String, String> entry : configMap.entrySet()) {
-            if (!first) {
-                jsonBuilder.append(",");
-            }
-            jsonBuilder.append("\"").append(entry.getKey()).append("\":\"").append(entry.getValue()).append("\"");
-            first = false;
-        }
-        
-        jsonBuilder.append("}");
-        
         try {
-            // 直接写入文件
-            File configDir = new File(getProject().getBuildDir(), "soConfig");
-            if (!configDir.exists()) {
-                configDir.mkdirs();
+            // 添加默认值
+            configMap.putIfAbsent("minAppVersion", "1.0.0");
+            configMap.putIfAbsent("maxAppVersion", "2.0.0");
+            
+            // 使用Gson直接转换Map为JSON
+            com.google.gson.Gson gson = new com.google.gson.GsonBuilder().setPrettyPrinting().create();
+            String jsonContent = gson.toJson(configMap);
+            
+            // 直接使用默认的assets目录路径
+            File assetsDir = new File(getProject().getProjectDir(), "src/main/assets");
+            
+            if (!assetsDir.exists()) {
+                assetsDir.mkdirs();
             }
             
-            File configFile = new File(configDir, "flutterso.json");
-            FileUtil.writeStringToFile(configFile, jsonBuilder.toString());
-            
-            // 动态添加asset目录
-            AndroidSourceSet mainSourceSet = appExtension.getSourceSets().getByName("main");
-            mainSourceSet.getAssets().srcDirs(configDir.getAbsolutePath());
+            File configFile = new File(assetsDir, "flutterso.json");
+            FileUtil.writeStringToFile(configFile, jsonContent);
             
             LogUtil.log("配置文件写入成功: " + configFile.getAbsolutePath());
-            LogUtil.log("配置内容: " + jsonBuilder.toString());
+            LogUtil.log("配置内容: " + jsonContent);
         } catch (Exception e) {
             LogUtil.log("配置文件写入失败: " + e.getMessage());
         }
@@ -319,6 +220,21 @@ public class EngineSoDynamicTask extends DefaultTask {
             return ZipUtil.createSoPackage(soFile, version, zipFile, packageName);
         } catch (Exception e) {
             LogUtil.log("创建SO ZIP包失败: " + e.getMessage());
+            return null;
+        }
+    }
+    
+    private File createSoZipPackage(File soFile, String version, String packageName, String abi) {
+        try {
+            File tempDir = new File(getProject().getBuildDir(), "temp_so_packages");
+            if (!tempDir.exists()) {
+                tempDir.mkdirs();
+            }
+            
+            File zipFile = new File(tempDir, packageName + "_" + version + "-" + abi + ".zip");
+            return ZipUtil.createSoPackage(soFile, version, zipFile, packageName, abi);
+        } catch (Exception e) {
+            LogUtil.log("创建 " + abi + " SO ZIP包失败: " + e.getMessage());
             return null;
         }
     }

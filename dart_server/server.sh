@@ -2,7 +2,7 @@
 
 # Flutter SO包分发服务器启动脚本
 
-SERVER_PORT=1235
+SERVER_PORT=1234
 
 # 杀掉占用1234端口的进程
 echo "🔍 检查端口$SERVER_PORT占用情况..."

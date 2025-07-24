@@ -19,6 +19,13 @@ public class ZipUtil {
      * 创建SO包（ZIP格式）
      */
     public static File createSoPackage(File soFile, String version, File outputZipFile, String packageName) {
+        return createSoPackage(soFile, version, outputZipFile, packageName, null);
+    }
+    
+    /**
+     * 创建SO包（ZIP格式，支持架构信息）
+     */
+    public static File createSoPackage(File soFile, String version, File outputZipFile, String packageName, String abi) {
         if (soFile == null || !soFile.exists()) {
             LogUtil.log("SO文件不存在: " + (soFile != null ? soFile.getAbsolutePath() : "null"));
             return null;
@@ -39,6 +46,9 @@ public class ZipUtil {
             packageInfo.put("fileName", soFile.getName());
             packageInfo.put("packageName", packageName);
             packageInfo.put("createTime", System.currentTimeMillis());
+            if (abi != null && !abi.isEmpty()) {
+                packageInfo.put("abi", abi);
+            }
             
             // 创建ZIP文件
             ZipOutputStream zipOut = new ZipOutputStream(new FileOutputStream(outputZipFile));
