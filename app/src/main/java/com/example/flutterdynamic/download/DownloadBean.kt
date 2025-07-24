@@ -19,6 +19,16 @@ data class DownloadConfig(var url: String, var path: String) {
      */
     @DrawableRes
     var notificationIcon: Int? = null
+    
+    /**
+     * 期望的MD5值，用于文件完整性校验
+     */
+    var expectedMd5: String = ""
+    
+    /**
+     * 期望的文件大小，用于文件完整性校验
+     */
+    var expectedSize: Long = 0
 }
 
 sealed class DownloadState {

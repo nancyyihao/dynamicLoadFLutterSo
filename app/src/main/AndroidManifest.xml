@@ -2,6 +2,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- 网络权限 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    
+    <!-- 存储权限 - 动态SO加载需要 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    
+    <!-- Android 13+ 存储权限 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
     <application
         android:name=".MyApplication"
         android:allowBackup="true"
@@ -12,22 +25,41 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.FlutterDynamic"
+        android:requestLegacyExternalStorage="true"
+        android:usesCleartextTraffic="true"
         tools:targetApi="31">
+        
+        <!-- 主Activity -->
         <activity
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        
+        <!-- Flutter Activity -->
         <activity
             android:name="io.flutter.embedding.android.FlutterActivity"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.FlutterDynamic" />
+        
+        <!-- 动态SO测试Activity -->
+        <activity
+            android:name=".DynamicSoTestActivity"
+            android:exported="false"
+            android:label="动态SO测试工具"
+            android:theme="@style/Theme.FlutterDynamic" />
+
+        <activity
+            android:name=".DynamicFlutterActivity"
+            android:exported="false"
+            android:label="动态SO页面"
+            android:theme="@style/Theme.FlutterDynamic" />
+            
     </application>
 
 </manifest>
