@@ -25,7 +25,7 @@ cd dart_server && ./server.sh
 ### 3. 安装测试
 ```bash
 # 安装APK到设备
-adb install app/build/outputs/apk/release/app-release.apk
+adb install -r app/build/outputs/apk/release/app-release.apk
 
 # 启动应用
 adb shell am start -n com.example.flutterdynamic/.MainActivity
@@ -37,7 +37,6 @@ adb shell am start -n com.example.flutterdynamic/.MainActivity
 2. **点击"启动Flutter"** - 体验动态SO加载
 3. **点击"动态SO测试工具"** - 运行完整功能测试
 
-## 🔧 服务器管理
 ## 🔧 服务器管理
 
 ```bash

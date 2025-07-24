@@ -22,6 +22,7 @@ public class LogUtil {
         try {
             String time = new SimpleDateFormat("HH:mm:ss").format(System.currentTimeMillis());
             FileUtil.writeStringToFile(logFile, time + " --- " + msg + "\n", true);
+            System.out.println(time + " --- " + msg + "\n");
         } catch (IOException e) {
             throw new RuntimeException(e);
         }

@@ -4,6 +4,25 @@ plugins {
     id 'com.example.flutterplugin'
 }
 
+// 动态SO配置
+dynamicSo {
+    // 配置libapp.so
+    libapp {
+        minVersion '1.0.0'
+        maxVersion '6.8.8'
+        //uploadUrl 'https://your-server.com/upload'
+        //downloadUrl 'https://your-server.com/download'
+    }
+
+    // 配置libflutter.so
+    libflutter {
+        minVersion '1.0.0'
+        maxVersion '9.8.8'
+        //uploadUrl 'https://your-server.com/upload'
+        //downloadUrl 'https://your-server.com/download'
+    }
+}
+
 android {
     namespace 'com.example.flutterdynamic'
     compileSdk 34

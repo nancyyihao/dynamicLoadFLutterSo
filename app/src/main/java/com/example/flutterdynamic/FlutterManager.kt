@@ -55,10 +55,14 @@ object FlutterManager {
      * 从本地服务器加载SO文件（同步版本）
      */
     private fun loadFromLocalServerSync(context: Context): Boolean {
-        val localServerUrl = "http://192.168.1.2:1235"
+        val localServerUrl = "http://localhost:1234"
         Log.i(TAG, "开始从本地服务器加载SO: $localServerUrl")
         
         try {
+            // 获取设备ABI
+            val deviceAbi = getDeviceAbi()
+            Log.i(TAG, "设备ABI: $deviceAbi")
+            
             // 获取SO包列表
             val soListUrl = "$localServerUrl/api/so-packages"
             val soPackages = fetchSoPackageListSync(soListUrl)
@@ -70,22 +74,22 @@ object FlutterManager {
             
             val appVersion = getAppVersion(context)
             
-            // 查找兼容的Flutter SO包
-            val flutterPackage = findCompatiblePackage(soPackages, "libflutter", appVersion)
-            val appPackage = findCompatiblePackage(soPackages, "libapp", appVersion)
+            // 查找兼容的Flutter SO包（根据设备架构）
+            val flutterPackage = findCompatiblePackage(soPackages, "libflutter", appVersion, deviceAbi)
+            val appPackage = findCompatiblePackage(soPackages, "libapp", appVersion, deviceAbi)
             
             if (flutterPackage == null) {
-                Log.w(TAG, "未找到兼容的Flutter SO包版本")
+                Log.w(TAG, "未找到兼容的Flutter SO包版本（架构: $deviceAbi）")
                 return false
             }
             
             if (appPackage == null) {
-                Log.w(TAG, "未找到兼容的App SO包版本")
+                Log.w(TAG, "未找到兼容的App SO包版本（架构: $deviceAbi）")
                 return false
             }
             
-            Log.i(TAG, "找到Flutter SO包: ${flutterPackage.fileName}, 版本: ${flutterPackage.version}")
-            Log.i(TAG, "找到App SO包: ${appPackage.fileName}, 版本: ${appPackage.version}")
+            Log.i(TAG, "找到Flutter SO包: ${flutterPackage.fileName}, 版本: ${flutterPackage.version}, 架构: ${flutterPackage.abi}")
+            Log.i(TAG, "找到App SO包: ${appPackage.fileName}, 版本: ${appPackage.version}, 架构: ${appPackage.abi}")
             
             // 下载Flutter SO包
             val flutterZipFile = downloadSoPackageFromServerSync(
@@ -164,58 +168,332 @@ object FlutterManager {
     }
 
     /**
-     * 从assets配置加载SO文件（原有逻辑）
+     * 从assets配置加载SO文件
      */
     private suspend fun loadFromAssetsConfig(context: Context) {
-        val flutterSoUrl = context.assets.open("flutterso.json").readBytes().decodeToString()
-        val flutterConfig = Gson().fromJsonProxy(flutterSoUrl, FlutterConfig::class.java) ?: return
-        
-        // 检查版本兼容性
-        val appVersion = getAppVersion(context)
-        if (!SoPackageManager.isVersionCompatible(
-                flutterConfig.flutterSoVersion,
-                appVersion,
-                flutterConfig.minAppVersion,
-                flutterConfig.maxAppVersion
-            )) {
-            Log.w(TAG, "Flutter SO版本不兼容，当前App版本: $appVersion")
-            return
-        }
-
-        Log.i(TAG, "开始从assets配置下载SO文件")
-        Log.i(TAG, "Flutter SO URL: ${flutterConfig.flutterSoUrl}")
-        Log.i(TAG, "App SO URL: ${flutterConfig.appSoUrl}")
-
-        val libFlutterSOSaveDir = context.getDir("libflutter", Context.MODE_PRIVATE)
-        
-        // 下载Flutter SO
-        val libFlutterResult = downloadDynamicSO(context, DownloadConfig(
-            flutterConfig.flutterSoUrl,
-            libFlutterSOSaveDir.absolutePath
-        ).apply {
-            fileName = "libflutter.so"
-            expectedMd5 = flutterConfig.flutterSoMd5
-            expectedSize = flutterConfig.flutterSoSize
-        })
-        
-        // 下载App SO
-        val libAppResult = downloadDynamicSO(context, DownloadConfig(
-            flutterConfig.appSoUrl,
-            context.getDir("libapp", Context.MODE_PRIVATE).absolutePath
-        ).apply {
-            fileName = "libapp.so"
-            expectedMd5 = flutterConfig.appSoMd5
-            expectedSize = flutterConfig.appSoSize
-        })
-
-        //下载完成，动态加载，并初始化 FlutterEngineGroup
-        if (!TextUtils.isEmpty(libFlutterResult) && !TextUtils.isEmpty(libAppResult)){
-            Log.i(TAG, "两个SO文件下载成功，开始初始化Flutter")
-            loadAndInitFlutter(context, libFlutterSOSaveDir, libAppResult!!)
-        } else {
-            Log.e(TAG, "SO文件下载失败 - Flutter: ${libFlutterResult != null}, App: ${libAppResult != null}")
+        try {
+            // 获取设备ABI
+            val deviceAbi = getDeviceAbi()
+            Log.i(TAG, "设备ABI: $deviceAbi")
+            
+            // 加载Flutter SO配置
+            val flutterSoConfig = try {
+                context.assets.open("flutterso.json").readBytes().decodeToString()
+            } catch (e: Exception) {
+                Log.w(TAG, "无法加载flutterso.json: ${e.message}")
+                null
+            }
+            
+            // 加载App SO配置
+            val appSoConfig = try {
+                context.assets.open("appso.json").readBytes().decodeToString()
+            } catch (e: Exception) {
+                Log.w(TAG, "无法加载appso.json: ${e.message}")
+                null
+            }
+            
+            // 如果新配置文件不存在，尝试使用旧版配置
+            if (flutterSoConfig == null && appSoConfig == null) {
+                Log.w(TAG, "未找到任何配置文件，尝试使用旧版配置")
+                loadFromLegacyConfig(context)
+                return
+            }
+            
+            var flutterConfig: FlutterConfig? = null
+            var appConfig: FlutterConfig? = null
+            
+            // 解析Flutter SO配置
+            if (flutterSoConfig != null) {
+                flutterConfig = Gson().fromJsonProxy(flutterSoConfig, FlutterConfig::class.java)
+                if (flutterConfig == null) {
+                    Log.e(TAG, "解析flutterso.json失败")
+                }
+            }
+            
+            // 解析App SO配置
+            if (appSoConfig != null) {
+                appConfig = Gson().fromJsonProxy(appSoConfig, FlutterConfig::class.java)
+                if (appConfig == null) {
+                    Log.e(TAG, "解析appso.json失败")
+                }
+            }
+            
+            // 检查是否至少有一个配置可用
+            if (flutterConfig == null && appConfig == null) {
+                Log.e(TAG, "所有配置文件解析失败")
+                return
+            }
+            
+            // 检查版本兼容性
+            val appVersion = getAppVersion(context)
+            
+            var flutterAbiConfig: AbiConfigInfo? = null
+            var appAbiConfig: AbiConfigInfo? = null
+            
+            // 处理Flutter SO配置
+            if (flutterConfig != null) {
+                if (!SoPackageManager.isVersionCompatible(
+                        flutterConfig.flutterSoVersion ?: "",
+                        appVersion,
+                        flutterConfig.minAppVersion,
+                        flutterConfig.maxAppVersion
+                    )) {
+                    Log.w(TAG, "Flutter SO版本不兼容，当前App版本: $appVersion")
+                } else {
+                    flutterAbiConfig = getAbiConfig(flutterConfig, deviceAbi)
+                    if (flutterAbiConfig == null) {
+                        Log.w(TAG, "未找到Flutter SO的设备架构($deviceAbi)配置")
+                    }
+                }
+            }
+            
+            // 处理App SO配置
+            if (appConfig != null) {
+                if (!SoPackageManager.isVersionCompatible(
+                        appConfig.appSoVersion ?: "",
+                        appVersion,
+                        appConfig.minAppVersion,
+                        appConfig.maxAppVersion
+                    )) {
+                    Log.w(TAG, "App SO版本不兼容，当前App版本: $appVersion")
+                } else {
+                    appAbiConfig = getAbiConfig(appConfig, deviceAbi)
+                    if (appAbiConfig == null) {
+                        Log.w(TAG, "未找到App SO的设备架构($deviceAbi)配置")
+                    }
+                }
+            }
+            
+            // 如果都没有找到合适的配置，尝试旧版配置
+            if (flutterAbiConfig == null && appAbiConfig == null) {
+                Log.w(TAG, "未找到任何兼容的SO配置，尝试使用旧版配置")
+                loadFromLegacyConfig(context)
+                return
+            }
+            
+            Log.i(TAG, "开始从assets配置下载SO文件")
+            if (flutterAbiConfig != null) {
+                Log.i(TAG, "Flutter SO URL: ${flutterAbiConfig.url}")
+            }
+            if (appAbiConfig != null) {
+                Log.i(TAG, "App SO URL: ${appAbiConfig.url}")
+            }
+            
+            val libFlutterSOSaveDir = context.getDir("libflutter", Context.MODE_PRIVATE)
+            var libFlutterResult: String? = null
+            var libAppResult: String? = null
+            
+            // 下载Flutter SO（如果配置存在）
+            if (flutterAbiConfig != null) {
+                libFlutterResult = downloadDynamicSO(context, DownloadConfig(
+                    flutterAbiConfig.url,
+                    libFlutterSOSaveDir.absolutePath
+                ).apply {
+                    fileName = "libflutter.so"
+                    expectedMd5 = flutterAbiConfig.md5
+                    expectedSize = flutterAbiConfig.size
+                })
+            }
+            
+            // 下载App SO（如果配置存在）
+            if (appAbiConfig != null) {
+                libAppResult = downloadDynamicSO(context, DownloadConfig(
+                    appAbiConfig.url,
+                    context.getDir("libapp", Context.MODE_PRIVATE).absolutePath
+                ).apply {
+                    fileName = "libapp.so"
+                    expectedMd5 = appAbiConfig.md5
+                    expectedSize = appAbiConfig.size
+                })
+            }
+            
+            // 检查下载结果并初始化Flutter
+            val hasFlutter = !TextUtils.isEmpty(libFlutterResult)
+            val hasApp = !TextUtils.isEmpty(libAppResult)
+            
+            if (hasFlutter || hasApp) {
+                Log.i(TAG, "SO文件下载完成 - Flutter: $hasFlutter, App: $hasApp，开始初始化Flutter")
+                loadAndInitFlutter(context, libFlutterSOSaveDir, libAppResult ?: "")
+            } else {
+                Log.e(TAG, "所有SO文件下载失败")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "从assets配置加载SO文件失败", e)
         }
     }
+    
+    /**
+     * 从旧版配置加载SO文件
+     */
+    private suspend fun loadFromLegacyConfig(context: Context) {
+        try {
+            // 尝试加载旧版统一配置文件
+            val legacyConfigContent = try {
+                context.assets.open("flutter_so_config.json").readBytes().decodeToString()
+            } catch (e: Exception) {
+                Log.w(TAG, "无法加载旧版配置文件flutter_so_config.json: ${e.message}")
+                null
+            }
+            
+            if (legacyConfigContent == null) {
+                Log.e(TAG, "未找到任何可用的配置文件")
+                return
+            }
+            
+            val flutterConfig = Gson().fromJsonProxy(legacyConfigContent, FlutterConfig::class.java)
+            if (flutterConfig == null) {
+                Log.e(TAG, "解析旧版配置文件失败")
+                return
+            }
+            
+            // 检查版本兼容性
+            val appVersion = getAppVersion(context)
+            if (!SoPackageManager.isVersionCompatible(
+                    flutterConfig.flutterSoVersion ?: "",
+                    appVersion,
+                    flutterConfig.minAppVersion,
+                    flutterConfig.maxAppVersion
+                )) {
+                Log.w(TAG, "Flutter SO版本不兼容，当前App版本: $appVersion")
+                return
+            }
+            
+            Log.i(TAG, "开始从旧版配置下载SO文件")
+            Log.i(TAG, "Flutter SO URL: ${flutterConfig.flutterSoUrl}")
+            Log.i(TAG, "App SO URL: ${flutterConfig.appSoUrl}")
+            
+            val libFlutterSOSaveDir = context.getDir("libflutter", Context.MODE_PRIVATE)
+            var libFlutterResult: String? = null
+            var libAppResult: String? = null
+            
+            // 下载Flutter SO（如果URL存在）
+            if (!flutterConfig.flutterSoUrl.isNullOrEmpty()) {
+                libFlutterResult = downloadDynamicSO(context, DownloadConfig(
+                    flutterConfig.flutterSoUrl,
+                    libFlutterSOSaveDir.absolutePath
+                ).apply {
+                    fileName = "libflutter.so"
+                    expectedMd5 = flutterConfig.flutterSoMd5 ?: ""
+                    expectedSize = flutterConfig.flutterSoSize
+                })
+            }
+            
+            // 下载App SO（如果URL存在）
+            if (!flutterConfig.appSoUrl.isNullOrEmpty()) {
+                libAppResult = downloadDynamicSO(context, DownloadConfig(
+                    flutterConfig.appSoUrl,
+                    context.getDir("libapp", Context.MODE_PRIVATE).absolutePath
+                ).apply {
+                    fileName = "libapp.so"
+                    expectedMd5 = flutterConfig.appSoMd5 ?: ""
+                    expectedSize = flutterConfig.appSoSize
+                })
+            }
+            
+            // 检查下载结果并初始化Flutter
+            val hasFlutter = !TextUtils.isEmpty(libFlutterResult)
+            val hasApp = !TextUtils.isEmpty(libAppResult)
+            
+            if (hasFlutter || hasApp) {
+                Log.i(TAG, "SO文件下载完成 - Flutter: $hasFlutter, App: $hasApp，开始初始化Flutter")
+                loadAndInitFlutter(context, libFlutterSOSaveDir, libAppResult ?: "")
+            } else {
+                Log.e(TAG, "所有SO文件下载失败")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "从旧版配置加载SO文件失败", e)
+        }
+    }
+
+    /**
+     * 获取设备ABI
+     */
+    private fun getDeviceAbi(): String {
+        return try {
+            val supportedAbis = android.os.Build.SUPPORTED_ABIS
+            Log.i(TAG, "设备支持的ABI列表: ${supportedAbis.joinToString(", ")}")
+            
+            if (supportedAbis.isNotEmpty()) {
+                val primaryAbi = supportedAbis[0]
+                Log.i(TAG, "选择主要ABI: $primaryAbi")
+                
+                // 确保返回的ABI是我们支持的架构之一
+                when (primaryAbi) {
+                    "arm64-v8a", "armeabi-v7a" -> {
+                        Log.i(TAG, "使用支持的ABI: $primaryAbi")
+                        primaryAbi
+                    }
+                    else -> {
+                        // 如果主要ABI不在支持列表中，查找支持的ABI
+                        val supportedAbi = supportedAbis.find { it in listOf("arm64-v8a", "armeabi-v7a") }
+                        if (supportedAbi != null) {
+                            Log.i(TAG, "主要ABI不支持，使用备选ABI: $supportedAbi")
+                            supportedAbi
+                        } else {
+                            Log.w(TAG, "未找到支持的ABI，使用默认值: arm64-v8a")
+                            "arm64-v8a"
+                        }
+                    }
+                }
+            } else {
+                Log.w(TAG, "设备ABI列表为空，使用默认值: arm64-v8a")
+                "arm64-v8a"
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "获取设备ABI失败", e)
+            "arm64-v8a" // 默认值
+        }
+    }
+    
+    /**
+     * 获取指定架构的SO配置
+     */
+    private fun getAbiConfig(config: FlutterConfig, abi: String): AbiConfigInfo? {
+        // 首先尝试获取新版多架构配置
+        val abiConfig = when (abi) {
+            "arm64-v8a" -> config.arm64_v8a
+            "armeabi-v7a" -> config.armeabi_v7a
+            else -> null
+        }
+        
+        if (abiConfig != null) {
+            return AbiConfigInfo(
+                md5 = abiConfig.md5,
+                size = abiConfig.size,
+                url = abiConfig.url
+            )
+        }
+        
+        // 如果新版配置不存在，尝试使用旧版配置
+        // 检查是否有Flutter SO的旧版配置
+        if (!config.flutterSoUrl.isNullOrEmpty()) {
+            return AbiConfigInfo(
+                md5 = config.flutterSoMd5 ?: "",
+                size = config.flutterSoSize,
+                url = config.flutterSoUrl
+            )
+        }
+        
+        // 检查是否有App SO的旧版配置
+        if (!config.appSoUrl.isNullOrEmpty()) {
+            return AbiConfigInfo(
+                md5 = config.appSoMd5 ?: "",
+                size = config.appSoSize,
+                url = config.appSoUrl
+            )
+        }
+        
+        return null
+    }
+    
+    /**
+     * 架构配置信息
+     */
+    data class AbiConfigInfo(
+        val md5: String,
+        val size: Long,
+        val url: String
+    )
 
     private suspend fun downloadDynamicSO(context: Context, downloadConfig: DownloadConfig): String? {
         return suspendCoroutine { continuation ->
@@ -403,11 +681,51 @@ object FlutterManager {
     private fun findCompatiblePackage(
         packages: List<SoPackageInfo>,
         packagePrefix: String,
+        appVersion: String,
+        deviceAbi: String
+    ): SoPackageInfo? {
+        Log.i(TAG, "查找兼容的SO包: 前缀=$packagePrefix, 设备架构=$deviceAbi")
+        
+        // 首先过滤出匹配前缀和架构的包
+        val compatiblePackages = packages.filter { soPackage ->
+            val matchesPrefix = soPackage.fileName.startsWith(packagePrefix)
+            val matchesAbi = soPackage.abi == deviceAbi || soPackage.fileName.contains(deviceAbi)
+            
+            Log.d(TAG, "检查包: ${soPackage.fileName}, 前缀匹配: $matchesPrefix, 架构匹配: $matchesAbi (包架构: ${soPackage.abi})")
+            
+            matchesPrefix && matchesAbi
+        }
+        
+        if (compatiblePackages.isEmpty()) {
+            Log.w(TAG, "未找到匹配的SO包，尝试查找所有架构的包")
+            // 如果没有找到匹配架构的包，尝试查找所有匹配前缀的包
+            val allMatchingPackages = packages.filter { it.fileName.startsWith(packagePrefix) }
+            Log.i(TAG, "找到 ${allMatchingPackages.size} 个匹配前缀的包")
+            allMatchingPackages.forEach { pkg ->
+                Log.i(TAG, "可用包: ${pkg.fileName}, 架构: ${pkg.abi}")
+            }
+            return null
+        }
+        
+        // 从兼容的包中选择版本最高的
+        // 从兼容的包中选择版本最高的
+        val selectedPackage = compatiblePackages.maxByOrNull { parseVersionCode(it.version) }
+        
+        if (selectedPackage != null) {
+            Log.i(TAG, "选择的SO包: ${selectedPackage.fileName}, 版本: ${selectedPackage.version}, 架构: ${selectedPackage.abi}")
+        }
+        
+        return selectedPackage
+    }
+    
+    // 重载方法，保持向后兼容性
+    private fun findCompatiblePackage(
+        packages: List<SoPackageInfo>,
+        packagePrefix: String,
         appVersion: String
     ): SoPackageInfo? {
-        return packages
-            .filter { it.fileName.startsWith(packagePrefix) }
-            .maxByOrNull { parseVersionCode(it.version) }
+        val deviceAbi = getDeviceAbi()
+        return findCompatiblePackage(packages, packagePrefix, appVersion, deviceAbi)
     }
     
     private fun downloadSoPackageFromServerSync(
